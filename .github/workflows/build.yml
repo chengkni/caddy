@@ -255,7 +255,31 @@ jobs:
             caddy_${{ needs.check.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz.sha256
           if-no-files-found: error
 
-      - name: 打 tag 时附加到 Release
+      # Artifacts 必须登录才能下载，而且 90 天就过期；Release 的 Assets
+      # 匿名可下、且不过期，所以每次构建都往 Release 里放一份。
+      # 每个 Caddy 版本一个 Release（tag 形如 caddy-2.11.7），重复构建用
+      # --clobber 覆盖同名文件。注意这个 tag 不匹配 v*，不会反过来触发本 workflow。
+      - name: 发布到 caddy-<版本> 的 Release
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          VERSION: ${{ needs.check.outputs.version }}
+          IMAGE: ${{ needs.check.outputs.image }}
+        run: |
+          set -eux
+          tag="caddy-${VERSION}"
+          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release create "$tag" \
+              --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" \
+              --title "Caddy ${VERSION} + alidns + cache-handler" \
+              --notes "由 GitHub Actions 自动构建。Docker 镜像 ghcr.io/${IMAGE}:caddy-${VERSION} ；静态二进制见下方 Assets。"
+          fi
+          gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
+            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
+            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
+
+      - name: 如果你自己打了 tag，也附加一份到那个 Release
         if: startsWith(github.ref, 'refs/tags/')
         env:
           GH_TOKEN: ${{ github.token }}

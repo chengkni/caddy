@@ -113,12 +113,32 @@ volumes:
 
 ### 静态二进制（不用 docker 的场景）
 
-Actions 运行页面底部的 **Artifacts** 里下载 `caddy-linux-amd64`；
-如果推的是 `v*` tag，还会自动挂到 Release 上，同时生成 `.sha256`。
+**去 Releases 页面拿，不要用 Actions 的 Artifacts。** 两者差别很大：
+
+| | Actions 的 Artifacts | Release 的 Assets |
+| --- | --- | --- |
+| 是否需要登录 | **必须登录**（公开仓库也一样） | 匿名可下载 |
+| 有效期 | 90 天后自动删除 | 永久 |
+| 位置 | 某次 run 页面最底部 | 仓库右侧 Releases |
+
+每次构建都会自动发一个以 Caddy 版本命名的 Release（tag 形如 `caddy-2.11.7`），
+里面是 `amd64` / `arm64` 两个 `.tar.gz` 加各自的 `.sha256`。固定下载地址：
+
+```
+https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
+https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_arm64.tar.gz
+```
+
+想拿最新版，直接看 `https://github.com/<你>/<仓库>/releases/latest`（GitHub 会自动
+指向最新那个 Release）。你自己推 `v*` tag 时，同样两个文件也会额外挂到那个 tag 的 Release 上。
+
+> Artifacts 里下载到的是个 ZIP，里面才是 `.tar.gz`（两层压缩）；Release 的 Assets 是直接给 `.tar.gz`。
 
 ```bash
-tar xzf caddy_2.11.7_linux_amd64.tar.gz
+curl -fLO https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
+curl -fLO https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz.sha256
 sha256sum -c caddy_2.11.7_linux_amd64.tar.gz.sha256
+tar xzf caddy_2.11.7_linux_amd64.tar.gz
 sudo install -m 0755 caddy /usr/bin/caddy
 /usr/bin/caddy version
 ```
@@ -182,6 +202,9 @@ docker run --rm ghcr.io/<你>/<仓库>:caddy-2.11.7 \
 | 手动 Run workflow | **无条件构建**，可临时填 `caddy_version` 指定版本 |
 | 打 `v*` tag | **无条件构建**，并把二进制挂到 Release |
 | Pull request | 只验证能编过，不推送镜像 |
+
+另外，**除 PR 外每次成功构建都会把二进制发成一个 `caddy-<版本>` 的 Release**（匿名可下载、不过期），
+所以「拿到能直接用的二进制」这件事不依赖你手动打 tag。
 
 插件版本是问 Go module proxy 的 `@latest` 拿到的 —— 那正是 xcaddy 实际会拉取的版本，
 比查 GitHub release 更准（仓库没发 release 时也能拿到提交伪版本号）。解析出的版本会
