@@ -32,7 +32,12 @@ example.com {
 	encode zstd gzip
 
 	cache
-	reverse_proxy 127.0.0.1:8080
+
+	# 上游地址怎么写很关键 —— 容器里的 127.0.0.1 指的是 caddy 容器自己，不是宿主机：
+	#   同一 compose 网络里的其他容器 → 用服务名，例如 app:8080
+	#   跑在宿主机 / WSL 上的服务   → host.docker.internal:8080
+	#     （compose 里要同时放开 extra_hosts 那两行，Linux 上才有这个域名）
+	reverse_proxy app:8080
 }
 
 # 只想让某个站点单独用 DNS-01，就把 acme_dns 那段挪进站点的 tls 块：
