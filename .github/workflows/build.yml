@@ -62,7 +62,6 @@ jobs:
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           EVENT: ${{ github.event_name }}
-          REF: ${{ github.ref }}
           MANUAL_VERSION: ${{ github.event.inputs.caddy_version }}
         run: |
           set -euo pipefail
@@ -125,11 +124,13 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
           # ---------- 3) 决定是否构建 ----------
-          # 手动触发 / 打 tag：总是构建
-          # 其余（push 到 main、PR、定时）：先去注册表看这个指纹是否已经构建过
-          if [ "$EVENT" = "workflow_dispatch" ] || [ "$REF" != "${REF#refs/tags/}" ]; then
+          # 手动触发 / 任何 push（分支或 tag）：总是构建。
+          #   指纹关卡只留给「每 6 小时的定时探测」和 PR —— 那里才是真正烧额度的地方
+          #   （一年 1460 次）。日常 push 很少，拦它省不下什么，却会让人以为「推了却没反应」。
+          #   连推多个提交不会堆积：concurrency 的 cancel-in-progress 会取消上一次。
+          if [ "$EVENT" = "workflow_dispatch" ] || [ "$EVENT" = "push" ]; then
             should=true
-            reason="手动触发或打了 tag，总是构建"
+            reason="手动触发或 push，总是构建"
           elif echo "$GH_TOKEN" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin >/dev/null 2>&1; then
             if docker buildx imagetools inspect "${REGISTRY}/${{ steps.img.outputs.name }}:fp-${hash}" >/dev/null 2>&1; then
               should=false
