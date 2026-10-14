@@ -12,8 +12,18 @@
 
 services:
   caddy:
-    # 生产建议锁到具体的 caddy 版本，别用 latest —— 上游一更新镜像内容就变了，
-    # 出问题时不好定位。升级：docker compose pull && docker compose up -d
+    # 锁版本 还是 跟最新，按你要「可控」还是「省心」选：
+    #
+    #   caddy-2.11.7（默认）：随时知道自己在跑什么，回滚=把标签改回去。
+    #     代价：上游发新版后要手动改这一行（一年约 16 次）。
+    #
+    #   latest：并不会自己更新！仍然要 docker compose pull 才生效，
+    #     区别只是 pull 到的是「当时最新的那个」，具体版本得事后问容器：
+    #         docker compose exec caddy caddy version
+    #     好处是每次构建都留了 caddy-<版本> / fp-<指纹> 标签，随时可回滚。
+    #
+    #   想真·全自动，再加 pull_policy: always（每次 up/重启都去拉最新），
+    #     代价是某次重启后行为可能就和之前不一样了。
     image: ghcr.io/chengkni/caddy:caddy-2.11.7
     container_name: caddy
     restart: unless-stopped

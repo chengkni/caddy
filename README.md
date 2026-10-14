@@ -107,8 +107,13 @@ docker compose up -d
   Let's Encrypt 的签发频率限制（每域名每周 5 次）。compose 里已经声明成命名卷。
 - **改完 Caddyfile 不用重启容器**：`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`
   （官方镜像没有 ENTRYPOINT，所以这里要重复写一遍 `caddy` 子命令）。
-- **别用 `latest`，锁到具体版本**（如 `caddy-2.11.7`）。上游一更新镜像内容就变了，出问题不好定位。
-  升级就是 `docker compose pull && docker compose up -d`。
+- **锁版本 还是 用 `latest`，取决于你要「可控」还是「省心」。** 注意 `latest` **不会自己更新** ——
+  Docker 不会主动去比对远端，仍然要 `docker compose pull` 才生效，区别只是 pull 到的是「当时最新的那个」，
+  具体版本得事后 `docker compose exec caddy caddy version` 去问。所以 `latest` 是拿确定性换省心，
+  而不是拿确定性换自动化。真想要全自动就加 `pull_policy: always`（每次 `up`/重启都去拉），
+  代价是某次重启后行为可能就和之前不一样了。
+  好消息是两种用法都随时可回滚：每次构建都留了 `caddy-<版本>` 和 `fp-<指纹>` 标签，
+  把 image 改回上一个 `caddy-2.11.x` 再 `up -d` 即可。
 
 ### 静态二进制（不用 docker 的场景）
 
