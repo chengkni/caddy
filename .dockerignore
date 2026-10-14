@@ -1,0 +1,8 @@
+.git
+.gitignore
+.github
+dist/
+*.tar.gz
+*.sha256
+README.md
+Caddyfile.example

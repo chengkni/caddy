@@ -1,0 +1,53 @@
+# Caddyfile 示例
+#
+# 启用的两个插件：
+#   - alidns         走阿里云 DNS 做 DNS-01 校验，签证书不需要开放 80/443
+#   - cache-handler  反代内容缓存
+#
+# 详细子指令见插件 README，这里只放最小可用配置。
+
+{
+	# 走阿里云 DNS 做 DNS-01，凭证从环境变量读（见下方 docker-compose 片段）
+	acme_dns alidns {
+		access_key_id {env.ALIYUN_ACCESS_KEY_ID}
+		access_key_secret {env.ALIYUN_ACCESS_KEY_SECRET}
+		# 用了 STS 临时凭证再加这一行
+		# security_token {env.ALIYUN_SECURITY_TOKEN}
+	}
+
+	# cache-handler 的全局配置
+	# 其它可用子指令：allowed_http_verbs / stale / default_cache_control /
+	# cache_name / cache_keys / regex / api / badger / redis / etcd ...
+	cache {
+		ttl 5m
+	}
+
+	log {
+		level INFO
+	}
+}
+
+# 正式站点：先缓存，再反代
+example.com {
+	encode zstd gzip
+
+	cache
+	reverse_proxy 127.0.0.1:8080
+}
+
+# 只想让某个站点单独用 DNS-01，就把 acme_dns 那段挪进站点的 tls 块：
+#
+#   other.com {
+#       tls {
+#           dns alidns {
+#               access_key_id {env.ALIYUN_ACCESS_KEY_ID}
+#               access_key_secret {env.ALIYUN_ACCESS_KEY_SECRET}
+#           }
+#       }
+#       reverse_proxy 127.0.0.1:8081
+#   }
+
+# 健康检查端口，对应 Dockerfile 里的 EXPOSE 9080
+:9080 {
+	respond "caddy is up" 200
+}

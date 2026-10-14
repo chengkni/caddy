@@ -1,0 +1,27 @@
+# syntax=docker/dockerfile:1
+#
+# 这是你原来那版 Dockerfile：假定构建上下文里已经放了一个编译好的 caddy 二进制。
+#
+#   xcaddy build --with github.com/caddy-dns/alidns \
+#                --with github.com/caddyserver/cache-handler
+#   docker build -f Dockerfile.prebuilt -t my-caddy:2.11.7 .
+#
+# CI 主流程用的是 ./Dockerfile（多阶段、自包含、可直接多架构构建），
+# 这个文件留给你「先本地编译、再打包镜像」的用法。
+
+FROM caddy:2.11.7-alpine
+
+# 删掉官方的 Caddy 二进制（官方镜像放在 /usr/bin/caddy）
+RUN rm /usr/bin/caddy
+
+# 用自己编译的替换掉
+COPY caddy /usr/bin/caddy
+
+# 如需在镜像里装包，可以把 apk 源换成国内镜像：
+# RUN sed -i 's/dl-cdn.alpinelinux.org/mirrors.aliyun.com/g' /etc/apk/repositories \
+#     && apk add --no-cache openssl
+
+EXPOSE 9080
+EXPOSE 9443
+
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

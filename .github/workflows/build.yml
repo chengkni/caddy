@@ -1,0 +1,146 @@
+name: Build custom Caddy
+
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  pull_request:
+  schedule:
+    # 每周一 03:17 UTC 重新构建，自动跟进 caddy 和插件的新版本
+    - cron: "17 3 * * 1"
+  workflow_dispatch:
+    inputs:
+      caddy_version:
+        description: "Caddy 版本，留空则用下面的默认值"
+        required: false
+        default: ""
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CADDY_VERSION: ${{ github.event.inputs.caddy_version || '2.11.7' }}
+  # 插件清单：主要就这么一处要改。
+  # （Dockerfile 里也有一份同样的默认值，那只是为了本地 docker build 方便）
+  # 锁版本写成 github.com/caddy-dns/alidns@v1.1.1
+  PLUGINS: "github.com/caddy-dns/alidns github.com/caddyserver/cache-handler"
+  REGISTRY: ghcr.io
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  # ------------------------------------------------------------------ 镜像
+  image:
+    name: 镜像 linux/amd64 + linux/arm64
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      # GHCR 的镜像名必须全小写，而 github.repository 会保留仓库名的大小写，
+      # 所以这里用小写展开算一次；注意 env 上下文读不到 GITHUB_ENV 写的值，
+      # 必须用 step output 传下去。
+      - name: 计算镜像名
+        id: img
+        run: echo "name=${GITHUB_REPOSITORY,,}" >> "$GITHUB_OUTPUT"
+
+      - uses: docker/setup-buildx-action@v4
+
+      - name: 登录 GHCR
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@v4
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: 生成标签
+        id: meta
+        uses: docker/metadata-action@v6
+        with:
+          images: ${{ env.REGISTRY }}/${{ steps.img.outputs.name }}
+          tags: |
+            type=raw,value=latest,enable={{is_default_branch}}
+            type=raw,value=caddy-${{ env.CADDY_VERSION }}
+            type=ref,event=tag
+            type=semver,pattern={{version}}
+            type=semver,pattern={{major}}.{{minor}}
+            type=sha,format=short,prefix=sha-
+
+      - name: 构建并推送
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            CADDY_VERSION=${{ env.CADDY_VERSION }}
+            PLUGINS=${{ env.PLUGINS }}
+          # 定时构建必须绕开缓存，否则 xcaddy 那一层会被缓存命中，
+          # 插件根本不会更新到新版。
+          no-cache: ${{ github.event_name == 'schedule' }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+  # ------------------------------------------------------ 独立二进制文件
+  # 给不用 docker 的场景（VPS + systemd），产物是静态二进制
+  binary:
+    name: 二进制 linux/${{ matrix.goarch }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    strategy:
+      fail-fast: false
+      # 串行跑：两个 job 都要确保 release 存在，并行会撞车
+      max-parallel: 1
+      matrix:
+        goarch: [amd64, arm64]
+    steps:
+      - uses: actions/checkout@v7
+
+      # 借用官方 builder 镜像，在 runner 本机架构上交叉编译出目标架构的二进制
+      - name: 交叉编译
+        env:
+          GOARCH: ${{ matrix.goarch }}
+        run: |
+          set -eux
+          mkdir -p dist
+          docker run --rm \
+            -v "$PWD/dist:/dist" \
+            -e PLUGINS -e GOARCH -e GOOS=linux -e CGO_ENABLED=0 \
+            "caddy:${CADDY_VERSION}-builder" \
+            sh -c 'args=""; for p in $PLUGINS; do args="$args --with $p"; done; xcaddy build $args --output /dist/caddy'
+          chmod +x dist/caddy
+          file dist/caddy
+
+      - name: 打包并生成校验和
+        run: |
+          set -eux
+          name="caddy_${CADDY_VERSION}_linux_${{ matrix.goarch }}"
+          tar -C dist -czf "${name}.tar.gz" caddy
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+
+      - uses: actions/upload-artifact@v7
+        with:
+          name: caddy-linux-${{ matrix.goarch }}
+          path: |
+            caddy_${{ env.CADDY_VERSION }}_linux_${{ matrix.goarch }}.tar.gz
+            caddy_${{ env.CADDY_VERSION }}_linux_${{ matrix.goarch }}.tar.gz.sha256
+          if-no-files-found: error
+
+      - name: 打 tag 时附加到 Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -eux
+          gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
+          gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
+            "caddy_${CADDY_VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
+            "caddy_${CADDY_VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"

@@ -1,0 +1,12 @@
+# 本地编译出来的二进制，不要提交（CI 会自己编）
+/caddy
+/dist/
+*.tar.gz
+*.sha256
+
+# 凭证：阿里云 AK/SK、Docker Hub token 等都放这里，绝不提交
+.env
+.env.*
+!.env.example
+*.pem
+*.key

@@ -1,0 +1,51 @@
+# syntax=docker/dockerfile:1
+#
+# 自定义 Caddy 镜像：官方 Caddy + alidns DNS-01 插件 + cache-handler 缓存插件
+#
+# 多阶段构建：builder 阶段用官方 `-builder` 镜像跑 xcaddy，
+# 运行阶段叠在官方 alpine 镜像上（沿用官方目录结构 / CMD）。
+#
+# 多架构说明：Caddy 和这两个插件都是纯 Go，产物静态无依赖，
+# 所以靠 GOARCH 交叉编译就够了，不需要 QEMU 模拟。
+
+ARG CADDY_VERSION=2.11.7
+
+# ============================================================ 编译阶段
+# --platform=$BUILDPLATFORM 让编译始终跑在 runner 自己的架构上，
+# 再通过 GOARCH 交叉编译出目标架构的二进制。
+FROM --platform=$BUILDPLATFORM caddy:${CADDY_VERSION}-builder AS builder
+
+# 空格分隔的插件清单，CI 通过 --build-arg PLUGINS=... 覆盖。
+# 要锁定版本就写成 github.com/caddy-dns/alidns@v1.1.1 这种形式。
+ARG PLUGINS="github.com/caddy-dns/alidns github.com/caddyserver/cache-handler"
+
+# buildx 在多架构构建时自动注入；单架构构建时为空
+ARG TARGETARCH
+ARG TARGETVARIANT
+
+# xcaddy 会把 GOOS / GOARCH / GOARM 透传给 go build 完成交叉编译
+# （xcaddy 自身没有 --os / --arch 参数，只能靠环境变量）
+RUN set -eux; \
+    args=""; \
+    for p in ${PLUGINS}; do args="${args} --with ${p}"; done; \
+    export GOOS=linux; \
+    export GOARCH="${TARGETARCH}"; \
+    export CGO_ENABLED=0; \
+    if [ -n "${TARGETVARIANT}" ]; then export "GOARM=${TARGETVARIANT#v}"; fi; \
+    echo "==> xcaddy build${args} [GOARCH=${GOARCH}]"; \
+    xcaddy build ${args} --output /usr/bin/caddy; \
+    /usr/bin/caddy version
+
+# ============================================================ 运行阶段
+FROM caddy:${CADDY_VERSION}-alpine
+
+# 用自己编译的二进制覆盖官方的（官方镜像里 caddy 就在 /usr/bin/caddy，
+# 且镜像本身没有 ENTRYPOINT，启动方式完全由下面的 CMD 决定）
+COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+
+# 官方镜像本身已 EXPOSE 80 / 443 / 443/udp / 2019，这里是额外暴露你用的端口
+EXPOSE 9080
+EXPOSE 9443
+
+# 与官方镜像的默认 CMD 一致，显式写出来表明启动方式
+CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]
