@@ -258,24 +258,66 @@ jobs:
 
       # Artifacts 必须登录才能下载，而且 90 天就过期；Release 的 Assets
       # 匿名可下、且不过期，所以每次构建都往 Release 里放一份。
-      # 每个 Caddy 版本一个 Release（tag 形如 caddy-2.11.7），重复构建用
-      # --clobber 覆盖同名文件。注意这个 tag 不匹配 v*，不会反过来触发本 workflow。
-      - name: 发布到 caddy-<版本> 的 Release
+      # 每个 Caddy 版本一个 Release（tag 形如 caddy-2.11.7）。标题和说明每次构建都刷新，
+      # 所以插件版本变了、说明不会停在首次创建的内容上。
+      # 注意这个 tag 不匹配 v*，不会反过来触发本 workflow。
+      - name: 发布/更新 caddy-<版本> 的 Release
         if: github.event_name != 'pull_request'
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ needs.check.outputs.version }}
+          PINNED: ${{ needs.check.outputs.plugins }}
+          FP: ${{ needs.check.outputs.fingerprint }}
           IMAGE: ${{ needs.check.outputs.image }}
         run: |
           set -eux
           tag="caddy-${VERSION}"
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
-            gh release create "$tag" \
-              --repo "$GITHUB_REPOSITORY" \
-              --target "$GITHUB_SHA" \
-              --title "Caddy ${VERSION} + alidns + cache-handler" \
-              --notes "由 GitHub Actions 自动构建。Docker 镜像 ghcr.io/${IMAGE}:caddy-${VERSION} ；静态二进制见下方 Assets。"
+          plugin_list=$(printf '%s\n' ${PINNED} | sed 's/^/- /')
+
+          notes=$(cat <<EOF
+          Caddy **v${VERSION}**，由 GitHub Actions 自动构建。
+
+          #### 携带的插件
+
+          ${plugin_list}
+
+          #### Docker 镜像
+
+          ~~~
+          docker pull ghcr.io/${IMAGE}:${tag}
+          ~~~
+
+          支持 \`linux/amd64\` 与 \`linux/arm64\`。同一次构建还会额外打上
+          \`latest\`（默认分支最新）、\`fp-${FP}\`（构建指纹）、\`sha-<提交>\`（对应提交）等标签。
+
+          #### 静态二进制
+
+          - \`caddy_${VERSION}_linux_amd64.tar.gz\`（另有同名 \`.sha256\`）
+          - \`caddy_${VERSION}_linux_arm64.tar.gz\`（另有同名 \`.sha256\`）
+
+          ~~~
+          curl -fLO https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}/caddy_${VERSION}_linux_amd64.tar.gz
+          sha256sum -c caddy_${VERSION}_linux_amd64.tar.gz.sha256
+          tar xzf caddy_${VERSION}_linux_amd64.tar.gz
+          sudo install -m 0755 caddy /usr/bin/caddy
+          ~~~
+
+          #### 构建信息
+
+          - 构建指纹：\`fp-${FP}\`
+          - 构建日志：https://github.com/${GITHUB_REPOSITORY}/actions/runs/${GITHUB_RUN_ID}
+          EOF
+          )
+
+          if gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            # 已存在就地更新，不要删 tag
+            gh release edit "$tag" --repo "$GITHUB_REPOSITORY" \
+              --title "Caddy ${VERSION}" --notes "$notes"
+          else
+            gh release create "$tag" --repo "$GITHUB_REPOSITORY" \
+              --target "$GITHUB_SHA" --title "Caddy ${VERSION}" --notes "$notes"
           fi
+
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
             "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
             "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
