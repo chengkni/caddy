@@ -3,7 +3,7 @@
 把「本机装 Go + xcaddy，手动编译 caddy，再 docker build」这套流程搬到 GitHub Actions 上。
 定时轮询上游，**Caddy 或任一插件发新版就自动重编**；也可以随时手动触发。产出：
 
-- **多架构 Docker 镜像**：`ghcr.io/<你>/<仓库>`，`linux/amd64` + `linux/arm64`
+- **多架构 Docker 镜像**：`ghcr.io/chengkni/caddy`，`linux/amd64` + `linux/arm64`
 - **静态二进制**：`caddy_2.11.7_linux_amd64.tar.gz` / `_arm64`，带 sha256，可直接配 systemd
 
 当前内置两个插件：
@@ -84,32 +84,31 @@ GHCR 的包**默认是 private**，这跟仓库本身是公开还是私有无关
 | `sha-abc1234` | 对应某次提交 |
 
 ```bash
-docker pull ghcr.io/<你的用户名>/<仓库名>:caddy-2.11.7
+docker pull ghcr.io/chengkni/caddy:caddy-2.11.7
 ```
 
-`docker-compose.yml` 片段（沿用你原来的端口 9080/9443）：
+`docker-compose.yml` 直接用仓库里的 [`docker-compose.example.yml`](docker-compose.example.yml)（沿用你原来的端口 9080/9443）：
 
-```yaml
-services:
-  caddy:
-    image: ghcr.io/<你的用户名>/<仓库名>:caddy-2.11.7
-    container_name: caddy
-    restart: unless-stopped
-    ports:
-      - "9080:9080"
-      - "9443:9443"
-    environment:
-      ALIYUN_ACCESS_KEY_ID: ${ALIYUN_ACCESS_KEY_ID}
-      ALIYUN_ACCESS_KEY_SECRET: ${ALIYUN_ACCESS_KEY_SECRET}
-    volumes:
-      - ./Caddyfile:/etc/caddy/Caddyfile:ro
-      - caddy_data:/data          # 证书存在这里，千万别丢
-      - caddy_config:/config
+```bash
+cp docker-compose.example.yml docker-compose.yml
+cp Caddyfile.example Caddyfile          # 改里面的域名
 
-volumes:
-  caddy_data:
-  caddy_config:
+cat > .env <<'EOF'                       # .env 已在 .gitignore 里，不会被提交
+ALIYUN_ACCESS_KEY_ID=LTAI...
+ALIYUN_ACCESS_KEY_SECRET=...
+EOF
+
+docker compose up -d
 ```
+
+三个要点：
+
+- **`/data` 卷千万不能丢** —— 证书都在里面，丢了每次重启都会重新签发，很容易撞上
+  Let's Encrypt 的签发频率限制（每域名每周 5 次）。compose 里已经声明成命名卷。
+- **改完 Caddyfile 不用重启容器**：`docker compose exec caddy caddy reload --config /etc/caddy/Caddyfile`
+  （官方镜像没有 ENTRYPOINT，所以这里要重复写一遍 `caddy` 子命令）。
+- **别用 `latest`，锁到具体版本**（如 `caddy-2.11.7`）。上游一更新镜像内容就变了，出问题不好定位。
+  升级就是 `docker compose pull && docker compose up -d`。
 
 ### 静态二进制（不用 docker 的场景）
 
@@ -125,18 +124,18 @@ volumes:
 里面是 `amd64` / `arm64` 两个 `.tar.gz` 加各自的 `.sha256`。固定下载地址：
 
 ```
-https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
-https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_arm64.tar.gz
+https://github.com/chengkni/caddy/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
+https://github.com/chengkni/caddy/releases/download/caddy-2.11.7/caddy_2.11.7_linux_arm64.tar.gz
 ```
 
-想拿最新版，直接看 `https://github.com/<你>/<仓库>/releases/latest`（GitHub 会自动
+想拿最新版，直接看 `https://github.com/chengkni/caddy/releases/latest`（GitHub 会自动
 指向最新那个 Release）。你自己推 `v*` tag 时，同样两个文件也会额外挂到那个 tag 的 Release 上。
 
 > Artifacts 里下载到的是个 ZIP，里面才是 `.tar.gz`（两层压缩）；Release 的 Assets 是直接给 `.tar.gz`。
 
 ```bash
-curl -fLO https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
-curl -fLO https://github.com/<你>/<仓库>/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz.sha256
+curl -fLO https://github.com/chengkni/caddy/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz
+curl -fLO https://github.com/chengkni/caddy/releases/download/caddy-2.11.7/caddy_2.11.7_linux_amd64.tar.gz.sha256
 sha256sum -c caddy_2.11.7_linux_amd64.tar.gz.sha256
 tar xzf caddy_2.11.7_linux_amd64.tar.gz
 sudo install -m 0755 caddy /usr/bin/caddy
@@ -170,7 +169,7 @@ WantedBy=multi-user.target
 ## 怎么确认插件真的编进去了
 
 ```bash
-docker run --rm ghcr.io/<你>/<仓库>:caddy-2.11.7 \
+docker run --rm ghcr.io/chengkni/caddy:caddy-2.11.7 \
   caddy list-modules | grep -E 'alidns|handlers.cache'
 ```
 
@@ -205,6 +204,36 @@ docker run --rm ghcr.io/<你>/<仓库>:caddy-2.11.7 \
 
 另外，**除 PR 外每次成功构建都会把二进制发成一个 `caddy-<版本>` 的 Release**（匿名可下载、不过期），
 所以「拿到能直接用的二进制」这件事不依赖你手动打 tag。
+
+### 每 6 小时一次，会不会白烧资源？
+
+**不会。每 6 小时跑的是「探测」，不是「构建」。** 探测 job 只有十几秒：查一次上游版本号、
+问一次 Go module proxy、去 GHCR 看一眼那个指纹的镜像在不在。指纹没变的话，`image` 和
+`binary` 两个 job 直接整个跳过，一行编译都不会执行。
+
+上游实际发版频率（最近 12 个月实测）：
+
+| 项目 | 发版次数 |
+| --- | --- |
+| `caddyserver/caddy` | 8 |
+| `caddy-dns/alidns` | 7 |
+| `caddyserver/cache-handler` | 1 |
+| **合计** | **约 16 次/年** |
+
+一年 1,460 次探测里，真正触发构建的**大约只有 16 次**，其余 1,444 次都在几秒内跳过。
+这正是指纹机制存在的意义 —— 否则一年会白白产出 1,460 个内容完全相同的镜像。
+
+消耗方面：
+
+- **Actions 分钟**：公开仓库的标准 runner 免费不计费，探测本身零成本。
+  私有仓库才计分钟，探测约 120 分钟/月（每天 4 次 × 每次 1 分钟计费下限），Free 计划 2,000 分钟/月够用。
+- **镜像存储**：**公开包的存储和流量都免费**。每个镜像约 41 MB（amd64）/ 38.5 MB（arm64），
+  按一年 16 个版本累计约 1.3 GB，不花你钱。
+- 想更省，把 cron 从每 6 小时改成 12 或 24 小时即可，代价只是发现新版本慢半天。
+
+> 如果哪天把仓库改成私有：镜像存储会走 500 MB 免费额度（且与 Actions artifacts 共享），
+> 一年 16 个版本约 1.3 GB 就会超。那时在 Packages 页面删掉旧的 `fp-*` 标签即可释放空间 ——
+> 代价仅仅是那个指纹「查不到已构建过」，下次探测会重新编译一次。
 
 插件版本是问 Go module proxy 的 `@latest` 拿到的 —— 那正是 xcaddy 实际会拉取的版本，
 比查 GitHub release 更准（仓库没发 release 时也能拿到提交伪版本号）。解析出的版本会
