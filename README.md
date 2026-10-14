@@ -1,7 +1,7 @@
 # 用 GitHub Actions 打包带插件的 Caddy
 
 把「本机装 Go + xcaddy，手动编译 caddy，再 docker build」这套流程搬到 GitHub Actions 上。
-以后只需要 push，或者在 Actions 页面点一下，就自动产出：
+定时轮询上游，**Caddy 或任一插件发新版就自动重编**；也可以随时手动触发。产出：
 
 - **多架构 Docker 镜像**：`ghcr.io/<你>/<仓库>`，`linux/amd64` + `linux/arm64`
 - **静态二进制**：`caddy_2.11.7_linux_amd64.tar.gz` / `_arm64`，带 sha256，可直接配 systemd
@@ -34,17 +34,14 @@ Caddyfile.example              配置示例（含 alidns + cache 的写法）
 
 ### 1. 推到 GitHub
 
+本地仓库和首次提交**已经做好了**。提交作者用的是 `chengkni@users.noreply.github.com`，
+不会泄露真实邮箱；你的全局 git 配置没有被改动。
+
+你只需要在 GitHub 上建一个**空仓库**（不要勾选 "Add a README" / .gitignore / license，否则 push 会冲突），然后：
+
 ```bash
 cd /home/chengkni/Software/config/caddy
-git init -b main
-git add .
-git commit -m "自定义 Caddy 构建（alidns + cache-handler）"
-```
-
-先在 GitHub 上建一个空仓库（不要勾选初始化 README），然后：
-
-```bash
-git remote add origin git@github.com:<你的用户名>/<仓库名>.git
+git remote add origin git@github.com:chengkni/<仓库名>.git
 git push -u origin main
 ```
 
@@ -57,11 +54,18 @@ push 上去就会触发一次 "Build custom Caddy"。
 注意 `schedule` 和 `workflow_dispatch` 这两个触发方式，**只有 workflow 文件已经存在于默认分支之后才会生效**，
 所以第一次可以先靠 push 触发，之后手动触发就有了。
 
-### 3. 把包改成公开
+### 3. 把包改成公开（可选）
 
-GHCR 的包默认是 **private**。不改的话服务器 `docker pull` 得先 `docker login`。
+GHCR 的包**默认是 private**，这跟仓库本身是公开还是私有无关。不改的话服务器 `docker pull` 得先 `docker login`。
 
 > GitHub → 右上角头像 → Your packages → 找到这个包 → Package settings → Change visibility → Public
+
+⚠️ **这一步不可逆**：包改成 public 之后就再也改不回 private 了。不过里面只是 Caddy + 两个开源插件，公开没风险。
+
+**仓库本身建议建 public**：标准 runner 在公开仓库上免费用、不计分钟数；私有仓库则走 Free 计划的
+2,000 分钟/月额度（本方案一次完整构建约 10~15 分钟，而且日常只有上游真发新版才会编译，
+即便私有也远够用）。仓库里没有任何机密 —— `Caddyfile.example` 全是 `{env.*}` 占位符，
+凭证由你自己在服务器上通过环境变量注入。
 
 ---
 
@@ -74,6 +78,7 @@ GHCR 的包默认是 **private**。不改的话服务器 `docker pull` 得先 `d
 | 标签 | 含义 |
 | --- | --- |
 | `caddy-2.11.7` | 固定 caddy 版本，**生产建议用这个** |
+| `fp-17ad3f8164aa` | 构建指纹，用来判断「这套输入是否已经构建过」（见下节） |
 | `latest` | 默认分支最新构建 |
 | `1.2.3` / `1.2` | 你打 `v1.2.3` tag 时自动生成 |
 | `sha-abc1234` | 对应某次提交 |
@@ -160,6 +165,40 @@ docker run --rm ghcr.io/<你>/<仓库>:caddy-2.11.7 \
 
 ---
 
+## 什么时候会自动构建
+
+`check` job（很轻，几秒钟，不编译任何东西）先算出「构建指纹」，再去 GHCR 查这个指纹的镜像是否已存在：
+
+```
+指纹 = caddy 版本 + 每个插件解析出的确切版本 + Dockerfile 的 sha256
+```
+
+各触发方式的行为：
+
+| 触发 | 行为 |
+| --- | --- |
+| 定时（默认每 6 小时） | 上游 Caddy 或任一插件发新版 → 指纹变了 → 自动构建 |
+| push 到 main | 同上；输入没变就跳过，不白烧额度 |
+| 手动 Run workflow | **无条件构建**，可临时填 `caddy_version` 指定版本 |
+| 打 `v*` tag | **无条件构建**，并把二进制挂到 Release |
+| Pull request | 只验证能编过，不推送镜像 |
+
+插件版本是问 Go module proxy 的 `@latest` 拿到的 —— 那正是 xcaddy 实际会拉取的版本，
+比查 GitHub release 更准（仓库没发 release 时也能拿到提交伪版本号）。解析出的版本会
+**带精确版本号传给 xcaddy**，所以同一个镜像标签永远对应同一份代码，构建可复现。
+
+想改轮询频率就改 `build.yml` 里的 cron（**UTC**）：
+
+```yaml
+  schedule:
+    - cron: "23 */6 * * *"    # 每 6 小时；改 "23 */12 * * *" 就是每 12 小时
+```
+
+> GitHub 的定时任务是「尽力而为」，高峰期可能延迟甚至跳过，别指望它精确到分钟。
+> 真要立刻出镜像，直接用 Actions 页面上的 Run workflow。
+
+---
+
 ## 常见改动
 
 **加插件** —— 只改一处，`build.yml` 顶部的 `PLUGINS`：
@@ -170,14 +209,16 @@ PLUGINS: "github.com/caddy-dns/alidns github.com/caddyserver/cache-handler githu
 
 （`Dockerfile` 里那份默认值也顺手改一下，那只是给本地 `docker build` 用的。）
 
-**锁定插件版本**（避免上游改动把构建搞挂）：
+**锁定插件版本**（避免上游改动把构建搞挂）：在 `PLUGINS` 里加 `@版本号` 即可，
+这个插件就不会再被自动跟进：
 
 ```
-github.com/caddy-dns/alidns@v1.1.1
+github.com/caddy-dns/alidns@v1.0.29
 ```
 
-**换 Caddy 版本** —— 改 `build.yml` 的 `CADDY_VERSION`，或手动触发时填；
-`Dockerfile` 的 `ARG CADDY_VERSION` 默认值同步改一下。
+**换 Caddy 版本** —— 平时不用管，定时任务自动跟上游最新 release。
+手动触发时可以在表单里填 `caddy_version` 指定；`build.yml` 里的 `FALLBACK_CADDY_VERSION`
+只是查上游 API 失败时的兜底值。`Dockerfile` 的 `ARG CADDY_VERSION` 默认值只影响本地 `docker build`。
 
 **只要 amd64**（省时间）—— 删掉 `platforms` 里的 `linux/arm64`。
 
@@ -203,8 +244,10 @@ github.com/caddy-dns/alidns@v1.1.1
 
 1. **镜像名必须全小写**，而 `github.repository` 会保留仓库名大小写 —— 所以 workflow 里先用
    `${GITHUB_REPOSITORY,,}` 转小写。注意 `env` 上下文**读不到** `GITHUB_ENV` 写的值，必须用 step output 传。
-2. **定时构建会被缓存骗过去**：`xcaddy build` 这条指令没变，Docker 层缓存会直接命中，
-   插件根本不会更新。所以定时那一跑加了 `no-cache: true`。
+2. **Docker 层缓存会骗过定时构建**：`xcaddy build` 那行指令文本没变的话，层缓存会直接命中，
+   插件根本没更新，但镜像照样被打上新标签 —— 变成「假装构建过了」。
+   解决办法是把版本信息喂进缓存键：CI 传的 `PLUGINS` 带精确版本号，外加一个出现在 `RUN` 里的
+   `FINGERPRINT` 参数，二者一变该层缓存立即失效。这比 `no-cache: true` 那种一刀切的做法精确得多。
 3. **多架构不需要 QEMU**：Caddy 和这两个插件都是纯 Go 产物，靠 `GOARCH` 交叉编译就行
    （xcaddy 没有 `--os/--arch` 参数，它透传 `GOOS/GOARCH/GOARM` 环境变量）。
    所以 Dockerfile 用了 `FROM --platform=$BUILDPLATFORM`，比 QEMU 模拟快得多。

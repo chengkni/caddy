@@ -15,9 +15,14 @@ ARG CADDY_VERSION=2.11.7
 # 再通过 GOARCH 交叉编译出目标架构的二进制。
 FROM --platform=$BUILDPLATFORM caddy:${CADDY_VERSION}-builder AS builder
 
-# 空格分隔的插件清单，CI 通过 --build-arg PLUGINS=... 覆盖。
-# 要锁定版本就写成 github.com/caddy-dns/alidns@v1.1.1 这种形式。
+# 空格分隔的插件清单，CI 通过 --build-arg PLUGINS=... 覆盖（CI 会传带精确版本的列表）。
+# 要锁定版本就写成 github.com/caddy-dns/alidns@v1.0.29 这种形式。
 ARG PLUGINS="github.com/caddy-dns/alidns github.com/caddyserver/cache-handler"
+
+# CI 传入的构建指纹（caddy 版本 + 各插件版本 + Dockerfile 哈希）。
+# 它出现在下面的 RUN 里，所以上游一发新版，这一层的 Docker 缓存就会失效，
+# 不会出现「明明该重编、结果命中了旧缓存」的情况。
+ARG FINGERPRINT=local
 
 # buildx 在多架构构建时自动注入；单架构构建时为空
 ARG TARGETARCH
@@ -26,6 +31,7 @@ ARG TARGETVARIANT
 # xcaddy 会把 GOOS / GOARCH / GOARM 透传给 go build 完成交叉编译
 # （xcaddy 自身没有 --os / --arch 参数，只能靠环境变量）
 RUN set -eux; \
+    echo "==> 构建指纹: ${FINGERPRINT}"; \
     args=""; \
     for p in ${PLUGINS}; do args="${args} --with ${p}"; done; \
     export GOOS=linux; \
