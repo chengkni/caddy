@@ -232,6 +232,9 @@ jobs:
             -e PLUGINS="$PINNED" -e GOARCH -e GOOS=linux -e CGO_ENABLED=0 \
             "caddy:${VERSION}-builder" \
             sh -c 'args=""; for p in $PLUGINS; do args="$args --with $p"; done; xcaddy build $args --output /dist/caddy'
+          # docker run 默认以 root 写入，挂载出来的 dist/caddy 属主是 root，
+          # 而 runner 不是 root —— 不先接管属主，下面的 chmod 会 Permission denied。
+          sudo chown "$(id -u):$(id -g)" dist/caddy
           chmod +x dist/caddy
           file dist/caddy
 

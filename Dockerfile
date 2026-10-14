@@ -30,6 +30,11 @@ ARG TARGETVARIANT
 
 # xcaddy 会把 GOOS / GOARCH / GOARM 透传给 go build 完成交叉编译
 # （xcaddy 自身没有 --os / --arch 参数，只能靠环境变量）
+#
+# 收尾用 `go version -m` 而不是 `/usr/bin/caddy version`：多架构构建时，目标架构的
+# 二进制是在本机架构上交叉编译出来的，直接执行会失败 —— /bin/sh 会把它当 shell 脚本
+# 解析，报 "ELF: not found" / "syntax error: unexpected ("" 然后返回 2。
+# `go version -m` 只读文件不执行，任何架构都能用，还能顺带证明插件真的链进去了。
 RUN set -eux; \
     echo "==> 构建指纹: ${FINGERPRINT}"; \
     args=""; \
@@ -40,7 +45,9 @@ RUN set -eux; \
     if [ -n "${TARGETVARIANT}" ]; then export "GOARM=${TARGETVARIANT#v}"; fi; \
     echo "==> xcaddy build${args} [GOARCH=${GOARCH}]"; \
     xcaddy build ${args} --output /usr/bin/caddy; \
-    /usr/bin/caddy version
+    go version -m /usr/bin/caddy > /tmp/modinfo.txt; \
+    sed -n '1,3p' /tmp/modinfo.txt; \
+    grep -E 'caddy-dns|cache-handler' /tmp/modinfo.txt
 
 # ============================================================ 运行阶段
 FROM caddy:${CADDY_VERSION}-alpine

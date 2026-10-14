@@ -258,8 +258,16 @@ github.com/caddy-dns/alidns@v1.0.29
 6. **`packages: write` 权限**：workflow 里已经声明，否则推 GHCR 会 403。
 7. **`CGO_ENABLED=0` 的前提是插件都是纯 Go**：现在的 alidns / cache-handler 都是。
    哪天加了依赖 CGO 的插件（比如要用系统库的），得把它改成 `1`，并在 builder 阶段
-   `apk add gcc musl-dev`（builder 镜像是 Debian 系，用 `apt-get install gcc`），
+   `apk add gcc musl-dev` —— 注意 builder 镜像 `caddy:2.11.7-builder` 是
+   **`FROM golang:1.27-alpine3.24`，Alpine/musl 系**，用 `apk` 不是 `apt`。
    而且那时就不能靠交叉编译了，得把 `--platform=$BUILDPLATFORM` 去掉改用 QEMU。
+8. **别在多架构构建里执行产物**：交叉编译出的 arm64 二进制在 amd64 容器里跑不了，
+   `/bin/sh` 会把它当 shell 脚本解析，报 `ELF: not found` / `syntax error: unexpected "("`
+   并以 exit code 2 失败 —— 而且报错信息里完全看不出是"架构不对"，很容易误判成编译失败。
+   所以校验要用 `go version -m <二进制>`（只读文件、不执行，任何架构都能用，
+   还能顺带打印出链进去的插件版本）。
+9. **`docker run` 写出的文件属主是 root**：runner 不是 root，所以挂载目录里那个二进制
+   直接 `chmod +x` 会 Permission denied（exit 1）。要先 `sudo chown "$(id -u):$(id -g)"`。
 
 ---
 
