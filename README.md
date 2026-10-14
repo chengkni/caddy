@@ -115,6 +115,40 @@ docker compose up -d
   好消息是两种用法都随时可回滚：每次构建都留了 `caddy-<版本>` 和 `fp-<指纹>` 标签，
   把 image 改回上一个 `caddy-2.11.x` 再 `up -d` 即可。
 
+### 离线镜像归档（拉不动 ghcr.io 时用）
+
+每次构建都会把镜像**按架构各导出成一个文件**放进 Release：
+
+```
+caddy-image_2.11.7_linux_amd64.tar.gz      （约 40 MB，另有同名 .sha256）
+caddy-image_2.11.7_linux_arm64.tar.gz      （约 38 MB，另有同名 .sha256）
+```
+
+在目标机器上：
+
+```bash
+sha256sum -c caddy-image_2.11.7_linux_amd64.tar.gz.sha256
+docker load < caddy-image_2.11.7_linux_amd64.tar.gz
+```
+
+**`docker load` 出来的镜像名与 GHCR 上完全一致**（`ghcr.io/chengkni/caddy:caddy-2.11.7`），
+因为 `docker save` 会把原始 RepoTags 一起打包。所以 `docker-compose.yml` 里的 `image:`
+一个字都不用改 —— 本地已有该镜像时，compose 的默认 `pull_policy: missing` 也就不会去联网拉。
+
+> **实测：这条路并不比直接 pull 快。** 从国内测两条出国通道都是 ~0.55 MB/s
+> （ghcr.io 拉 41 MB 用了 78 秒；github.com 下 17 MB 的二进制用了 31.6 秒），
+> 瓶颈是出国带宽而不是渠道，所以 40 MB 的归档同样要下约 72 秒。
+>
+> 它的价值在于**可以下载成文件后离线分发**：scp 到任意机器、内网环境、
+> 甚至完全没有外网的部署目标都能用；同时和 GHCR 互为备份。
+>
+> 嫌下载慢的话，唯一真正能提速的办法是在国内另建一个镜像仓库、让构建时同步推一份 ——
+> 需要你自己配账号，本文不展开。
+
+**代价**：每个 Release 增加约 78 MB（两个架构），一年约 16 个版本累计约 1.2 GB。
+公开仓库的 Release 资产不占额度也不收费；如果哪天你嫌它大，把 workflow 里「归档镜像」
+那一步和 Release 上传列表里的两个 `caddy-image_*` 删掉即可。
+
 ### 静态二进制（不用 docker 的场景）
 
 **去 Releases 页面拿，不要用 Actions 的 Artifacts。** 两者差别很大：

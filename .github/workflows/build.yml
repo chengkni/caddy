@@ -202,10 +202,12 @@ jobs:
           cache-to: type=gha,mode=max
 
   # ============================================================ 独立二进制
-  # 给不用 docker 的场景（VPS + systemd），产物是静态二进制
+  # 静态二进制 + 镜像归档。
+  # 必须等 image 跑完：归档镜像要先从 GHCR 把刚推上去的镜像拉下来。
+  # 因此 image 失败时这里会被跳过、不发 Release —— 这是有意的，避免只发一半产物。
   binary:
     name: 二进制 linux/${{ matrix.goarch }}
-    needs: check
+    needs: [check, image]
     if: needs.check.outputs.build == 'true'
     runs-on: ubuntu-latest
     permissions:
@@ -248,12 +250,31 @@ jobs:
           tar -C dist -czf "${name}.tar.gz" caddy
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
 
+      # 把镜像也归档一份放进 Release。出国带宽只有 ~0.55 MB/s，这条路的下载速度
+      # 不比直接 pull 快，价值在于「下载成文件后可以离线分发」（scp 到任意机器、
+      # 无外网环境也能用），并且和 GHCR 那边互为备份。
+      - name: 归档镜像
+        env:
+          VERSION: ${{ needs.check.outputs.version }}
+        run: |
+          set -eux
+          ref="${REGISTRY}/${{ needs.check.outputs.image }}:caddy-${VERSION}"
+          name="caddy-image_${VERSION}_linux_${{ matrix.goarch }}"
+          # 多架构镜像没法用一个 docker save 打包，所以只拉本架构那一份。
+          # save 出来的 tar 里带着原始 RepoTags，load 回去镜像名与 GHCR 一致。
+          docker pull --platform "linux/${{ matrix.goarch }}" "$ref"
+          docker save "$ref" | gzip -9 > "${name}.tar.gz"
+          sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
+          ls -lh "${name}.tar.gz"
+
       - uses: actions/upload-artifact@v7
         with:
           name: caddy-linux-${{ matrix.goarch }}
           path: |
             caddy_${{ needs.check.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz
             caddy_${{ needs.check.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz.sha256
+            caddy-image_${{ needs.check.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz
+            caddy-image_${{ needs.check.outputs.version }}_linux_${{ matrix.goarch }}.tar.gz.sha256
           if-no-files-found: error
 
       # Artifacts 必须登录才能下载，而且 90 天就过期；Release 的 Assets
@@ -290,6 +311,21 @@ jobs:
           支持 \`linux/amd64\` 与 \`linux/arm64\`。同一次构建还会额外打上
           \`latest\`（默认分支最新）、\`fp-${FP}\`（构建指纹）、\`sha-<提交>\`（对应提交）等标签。
 
+          #### 离线镜像归档
+
+          拉不动 ghcr.io、或要分发到没有外网的机器时，下载对应架构的这个文件：
+
+          - \`caddy-image_${VERSION}_linux_amd64.tar.gz\`（另有同名 \`.sha256\`）
+          - \`caddy-image_${VERSION}_linux_arm64.tar.gz\`（另有同名 \`.sha256\`）
+
+          ~~~
+          sha256sum -c caddy-image_${VERSION}_linux_amd64.tar.gz.sha256
+          docker load < caddy-image_${VERSION}_linux_amd64.tar.gz
+          ~~~
+
+          加载出来的镜像名与 GHCR 上完全一致（\`ghcr.io/${IMAGE}:${tag}\`），
+          所以 docker-compose.yml 里的 \`image:\` 不用改。
+
           #### 静态二进制
 
           - \`caddy_${VERSION}_linux_amd64.tar.gz\`（另有同名 \`.sha256\`）
@@ -320,7 +356,9 @@ jobs:
 
           gh release upload "$tag" --repo "$GITHUB_REPOSITORY" --clobber \
             "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
-            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
+            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256" \
+            "caddy-image_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
+            "caddy-image_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
 
       - name: 如果你自己打了 tag，也附加一份到那个 Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -333,4 +371,6 @@ jobs:
             || gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --generate-notes
           gh release upload "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --clobber \
             "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
-            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
+            "caddy_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256" \
+            "caddy-image_${VERSION}_linux_${{ matrix.goarch }}.tar.gz" \
+            "caddy-image_${VERSION}_linux_${{ matrix.goarch }}.tar.gz.sha256"
