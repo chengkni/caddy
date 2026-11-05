@@ -132,9 +132,26 @@ jobs:
             should=true
             reason="手动触发或 push，总是构建"
           elif echo "$GH_TOKEN" | docker login "$REGISTRY" -u "${{ github.actor }}" --password-stdin >/dev/null 2>&1; then
+            # 光有镜像还不算构建完成：binary job 可能在 image 之后才失败，
+            # 那时指纹标签已经写入，但二进制和 Release 都没有。
+            # 所以整体完成的判据是「指纹镜像存在」+「Release 里的文件齐了」。
+            # 每个架构 4 个文件（二进制 / 镜像归档 + 各自 .sha256），两个架构共 8 个。
+            img_ok=0
+            rel_ok=0
             if docker buildx imagetools inspect "${REGISTRY}/${{ steps.img.outputs.name }}:fp-${hash}" >/dev/null 2>&1; then
+              img_ok=1
+            fi
+            n=$(gh release view "caddy-${ver}" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
+            if [ "${n:-0}" -ge 8 ]; then
+              rel_ok=1
+            fi
+
+            if [ "$img_ok" = 1 ] && [ "$rel_ok" = 1 ]; then
               should=false
-              reason="指纹 fp-${hash} 已经构建过，跳过编译"
+              reason="指纹 fp-${hash} 已构建且 Release 完整，跳过"
+            elif [ "$img_ok" = 1 ]; then
+              should=true
+              reason="镜像已存在但 Release 不完整（上次可能只跑完一半），补建"
             else
               should=true
               reason="发现还没构建过的指纹，开始构建"
@@ -221,7 +238,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
 
-      # 借用官方 builder 镜像，在 runner 本机架构上交叉编译出目标架构的二进制
+      # 借用官方的浮动 builder 镜像，在 runner 本机架构上交叉编译出目标架构的二进制。
+      # 同样不能用 caddy:<版本>-builder —— 那个 tag 比上游 release 晚十几小时才发布。
       - name: 交叉编译
         env:
           GOARCH: ${{ matrix.goarch }}
@@ -233,8 +251,9 @@ jobs:
           docker run --rm \
             -v "$PWD/dist:/dist" \
             -e PLUGINS="$PINNED" -e GOARCH -e GOOS=linux -e CGO_ENABLED=0 \
-            "caddy:${VERSION}-builder" \
-            sh -c 'args=""; for p in $PLUGINS; do args="$args --with $p"; done; xcaddy build $args --output /dist/caddy'
+            -e CADDY_VERSION="$VERSION" \
+            caddy:builder \
+            sh -c 'ver="${CADDY_VERSION#v}"; args=""; for p in $PLUGINS; do args="$args --with $p"; done; xcaddy build "v${ver}" $args --output /dist/caddy'
           # docker run 默认以 root 写入，挂载出来的 dist/caddy 属主是 root，
           # 而 runner 不是 root —— 不先接管属主，下面的 chmod 会 Permission denied。
           sudo chown "$(id -u):$(id -g)" dist/caddy
