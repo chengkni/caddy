@@ -358,7 +358,7 @@ github.com/caddy-dns/alidns@v1.0.29
 6. **`packages: write` 权限**：workflow 里已经声明，否则推 GHCR 会 403。
 7. **`CGO_ENABLED=0` 的前提是插件都是纯 Go**：现在的 alidns / cache-handler 都是。
    哪天加了依赖 CGO 的插件（比如要用系统库的），得把它改成 `1`，并在 builder 阶段
-   `apk add gcc musl-dev` —— 注意 builder 镜像 `caddy:2.11.7-builder` 是
+   `apk add gcc musl-dev` —— 注意 builder 镜像 `caddy:builder` 当前是
    **`FROM golang:1.27-alpine3.24`，Alpine/musl 系**，用 `apk` 不是 `apt`。
    而且那时就不能靠交叉编译了，得把 `--platform=$BUILDPLATFORM` 去掉改用 QEMU。
 8. **别在多架构构建里执行产物**：交叉编译出的 arm64 二进制在 amd64 容器里跑不了，
@@ -368,6 +368,14 @@ github.com/caddy-dns/alidns@v1.0.29
    还能顺带打印出链进去的插件版本）。
 9. **`docker run` 写出的文件属主是 root**：runner 不是 root，所以挂载目录里那个二进制
    直接 `chmod +x` 会 Permission denied（exit 1）。要先 `sudo chown "$(id -u):$(id -g)"`。
+10. **`caddy:<版本>-builder` / `-alpine` 比 GitHub release 晚十几到几十小时**：
+    实测 v2.11.8 在 01:16 发布，`2.11.8-builder` 到当天 20:54 才出现在 Docker Hub（晚 ~19.7 小时）。
+    如果 Dockerfile 直接写 `FROM caddy:${CADDY_VERSION}-builder`，这段时间内的构建**必然失败**，
+    而且报错极具误导性：`no match for platform in manifest: not found` —— 看起来像架构问题，
+    实际只是那个 tag 还不存在。
+    现在改用浮动 tag `caddy:builder` / `caddy:alpine`（永远存在），具体编译哪个 Caddy 版本
+    交给 `xcaddy build "v${CADDY_VERSION}"` 的位置参数决定。运行阶段的基座版本无所谓：
+    它只提供 alpine 骨架、目录和 CA 证书，caddy 二进制整个会被覆盖。
 
 ---
 
