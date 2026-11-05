@@ -6,8 +6,10 @@ on:
     tags: ["v*"]
   pull_request:
   schedule:
-    # 每 6 小时轮询一次上游；只有「构建指纹」变了才真正编译（见 check job）
-    - cron: "23 */6 * * *"
+    # 每天轮询一次上游；只有「构建指纹」变了才真正编译（见 check job）。
+    # 上游 Caddy 约 8 次/年，每天一次足够；想更快可改 "23 */12 * * *"，
+    # 嫌 run 列表太密可改成周更 "23 3 * * 1"。
+    - cron: "23 3 * * *"
   workflow_dispatch:
     inputs:
       caddy_version:
@@ -125,8 +127,8 @@ jobs:
 
           # ---------- 3) 决定是否构建 ----------
           # 手动触发 / 任何 push（分支或 tag）：总是构建。
-          #   指纹关卡只留给「每 6 小时的定时探测」和 PR —— 那里才是真正烧额度的地方
-          #   （一年 1460 次）。日常 push 很少，拦它省不下什么，却会让人以为「推了却没反应」。
+          #   指纹关卡只留给「每天一次的定时探测」和 PR —— 那里才是轮询的主要来源
+          #   （一年 365 次）。日常 push 很少，拦它省不下什么，却会让人以为「推了却没反应」。
           #   连推多个提交不会堆积：concurrency 的 cancel-in-progress 会取消上一次。
           if [ "$EVENT" = "workflow_dispatch" ] || [ "$EVENT" = "push" ]; then
             should=true
