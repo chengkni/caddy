@@ -142,14 +142,18 @@ jobs:
             # 光有镜像还不算构建完成：binary job 可能在 image 之后才失败，
             # 那时指纹标签已经写入，但二进制和 Release 都没有。
             # 所以整体完成的判据是「指纹镜像存在」+「Release 里的文件齐了」。
-            # 每个架构 4 个文件（二进制 / 镜像归档 + 各自 .sha256），两个架构共 8 个。
+            # 4 个 tar.gz（2 个静态二进制 + 2 个镜像归档）都必须大于 1MB；
+            # 只数文件个数会把 20 字节的空归档当成完整。
             img_ok=0
             rel_ok=0
             if docker buildx imagetools inspect "${REGISTRY}/${{ steps.img.outputs.name }}:fp-${hash}" >/dev/null 2>&1; then
               img_ok=1
             fi
-            n=$(gh release view "caddy-${ver}" --repo "$GITHUB_REPOSITORY" --json assets --jq '.assets | length' 2>/dev/null || echo 0)
-            if [ "${n:-0}" -ge 8 ]; then
+            good=$(gh release view "caddy-${ver}" --repo "$GITHUB_REPOSITORY" \
+              --json assets \
+              --jq '[.assets[] | select(.name | endswith(".tar.gz")) | select(.size > 1000000)] | length' \
+              2>/dev/null || echo 0)
+            if [ "${good:-0}" -ge 4 ]; then
               rel_ok=1
             fi
 
@@ -284,13 +288,25 @@ jobs:
         env:
           VERSION: ${{ needs.check.outputs.version }}
         run: |
-          set -eux
+          set -euxo pipefail
           ref="${REGISTRY}/${{ needs.check.outputs.image }}:caddy-${VERSION}"
           name="caddy-image_${VERSION}_linux_${{ matrix.goarch }}"
-          # 多架构镜像没法用一个 docker save 打包，所以只拉本架构那一份。
-          # save 出来的 tar 里带着原始 RepoTags，load 回去镜像名与 GHCR 一致。
-          docker pull --platform "linux/${{ matrix.goarch }}" "$ref"
-          docker save "$ref" | gzip -9 > "${name}.tar.gz"
+
+          # 按架构直接从 registry 导出，不依赖 docker save 对多架构 tag 的处理。
+          # docker save 在 arm64 上会失败，管道又会把错误吞掉，产出 20 字节空包。
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq skopeo
+          skopeo copy --retry-times 3 \
+            --override-os linux --override-arch "${{ matrix.goarch }}" \
+            "docker://${ref}" "docker-archive:${name}.tar:${ref}"
+
+          test -s "${name}.tar"
+          size=$(stat -c%s "${name}.tar")
+          echo "tar size: ${size} bytes"
+          test "${size}" -gt 10000000
+
+          gzip -9 "${name}.tar"
+          test -s "${name}.tar.gz"
           sha256sum "${name}.tar.gz" > "${name}.tar.gz.sha256"
           ls -lh "${name}.tar.gz"
 
