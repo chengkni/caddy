@@ -54,7 +54,12 @@ RUN set -eux; \
     echo "==> xcaddy build v${ver}${args} [GOARCH=${GOARCH}]"; \
     xcaddy build "v${ver}" ${args} --output /usr/bin/caddy; \
     go version -m /usr/bin/caddy > /tmp/modinfo.txt; \
-    sed -n '1,3p' /tmp/modinfo.txt; \
+    sed -n '1,5p' /tmp/modinfo.txt; \
+    if ! grep -qE "github.com/caddyserver/caddy/v2[[:space:]]+v${ver}([[:space:]]|$)" /tmp/modinfo.txt; then \
+      echo "ERROR: 编译出的 Caddy 版本与 CADDY_VERSION=${ver} 不一致"; \
+      grep -E 'github.com/caddyserver/caddy/v2' /tmp/modinfo.txt || true; \
+      exit 1; \
+    fi; \
     grep -E 'caddy-dns|cache-handler' /tmp/modinfo.txt
 
 # ============================================================ 运行阶段

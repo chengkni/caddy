@@ -16,6 +16,11 @@ on:
         description: "Caddy 版本，留空 = 上游最新 release"
         required: false
         default: ""
+      no_cache:
+        description: "忽略构建缓存（版本/插件异常时用）"
+        type: boolean
+        required: false
+        default: false
 
 concurrency:
   group: ${{ github.workflow }}-${{ github.ref }}
@@ -219,6 +224,7 @@ jobs:
           # 上游一发新版缓存就失效，所以这里可以放心开缓存
           cache-from: type=gha
           cache-to: type=gha,mode=max
+          no-cache: ${{ github.event.inputs.no_cache == 'true' }}
 
   # ============================================================ 独立二进制
   # 静态二进制 + 镜像归档。
